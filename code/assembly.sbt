@@ -4,6 +4,9 @@ assemblySettings
 
 mergeStrategy in assembly <<= (mergeStrategy in assembly) { (old) =>  {
   case PathList("javax", "servlet", xs @ _*)         => MergeStrategy.first
+  case PathList("META-INF", "maven","org.slf4j", "slf4j-api", "pom.xml") => MergeStrategy.first
+  case PathList("META-INF", "maven","org.slf4j", "slf4j-api", "pom.properties") => MergeStrategy.first
+  case PathList("org", "apache", "commons", xs @ _*) => MergeStrategy.first
   case PathList("org", "apache", "commons", xs @ _*) => MergeStrategy.first
   case PathList("com", "esotericsoftware", "minlog", xs @ _*) => MergeStrategy.first
   case PathList("scala", "reflect", "api", xs @ _*) => MergeStrategy.first

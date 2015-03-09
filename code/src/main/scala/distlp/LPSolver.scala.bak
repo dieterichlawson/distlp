@@ -1,0 +1,56 @@
+package distlp
+
+import org.apache.spark.Logging
+
+import breeze.linalg._
+import breeze.linalg.{DenseVector => BDV, DenseMatrix => BDM}
+import org.apache.spark.rdd.RDD
+import org.apache.spark.SparkContext
+import org.apache.spark.storage._
+import org.apache.spark.broadcast._
+
+class LPSolver(val c: BDV[Double],
+               val A: RowMatrix,
+               val b: BDV[Double],
+               val x: BDV[Double],
+               val y: BDV[Double],
+               val z: BDV[Double],
+               val tol: Double = 1e-3,
+               @transient val sc: SparkContext)
+               extends Serializable with Logging{
+
+  var iter: Int=0
+
+  def solve(maxIterations: Int = 300){
+    solve(x => rho, maxIterations, evalFn)    
+  }
+
+  def solve(){
+    var done = false
+    while(!done){
+      iter += 1
+      iterate()
+      done = converged() || iter >= maxIterations
+    }
+  }
+
+  def iterate(){
+    // how to properly compute mu*e - Xz? dont want to broadcast all those mus
+    // how to properly do diag? don't want to broadcastx and z because we don't have
+    // to. Should be able to send pieces to each row matrix.
+    // how to transpose?
+    val r_4 = c - A.transpose()*y - z - diag(1/x)*(mu*e-diag(x.*z))
+    val rhs = b-A*x+ A*diag(1/z).^2*r_4
+    val mat = A*diag(x)*diag(1/z)*A'
+    val svd = mat.computeSVD(20, computeU = true)
+    val delta_y = (svd.V*diag(1/svd.s)*svd.U.transpose())*r_4
+    val delta_x = diag(x.*z).^2*(A.transpose()*delta_y - r_4)
+    val delta_z = 
+  }
+
+  def converged(rho: Double, evalFn: Boolean): Boolean = {
+  }
+
+
+  
+}

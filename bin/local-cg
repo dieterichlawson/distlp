@@ -1,0 +1,7 @@
+#!/bin/bash
+cd "$(dirname "$0")"
+/Users/dlaw/dev/spark/bin/spark-submit \
+  --class "distlp.examples.ConjugateGradientExample" \
+  --master local \
+  /Users/dlaw/dev/distlp/code/target/scala-2.10/DistLP-assembly-1.0.jar \
+  --numrows 100  
