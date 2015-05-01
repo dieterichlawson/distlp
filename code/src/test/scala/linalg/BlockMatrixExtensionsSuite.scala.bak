@@ -1,0 +1,56 @@
+package distlp.linalg
+import org.scalatest.FunSuite
+import org.scalatest.Matchers
+import distlp.SparkTestUtils
+import breeze.linalg.{DenseMatrix => BDM, DenseVector => BDV}
+import breeze.linalg._
+import breeze.numerics._
+
+import org.apache.spark.mllib.linalg.distributed.BlockMatrix
+import org.apache.spark.mllib.linalg.DenseVector
+import org.apache.spark.mllib.linalg.DenseMatrix
+import org.apache.spark.mllib.linalg.Matrix
+import distlp.linalg._
+import distlp.linalg.matext._
+import org.apache.spark.vecext._
+import org.apache.spark.vecext.norm
+
+import org.apache.spark.SparkContext
+
+class BlockMatrixExtensionsSuite extends SparkTestUtils{
+  
+  test("BlockMatrix multiply by vector works properly") {
+    val A = randBlockMatrix(100, 200, 10, 20, sc)
+    A.blocks.cache
+    val b = DenseVector.rand(200)
+    val result = A.multiply(b)
+    val localResult = A.toLocalMatrix.multiply(b)
+    assert(norm(result - localResult) <= 1e-10)
+  }
+
+  test("BlockMatrix multiply by diagonal matrix works properly") {
+    val A = randBlockMatrix(100, 200, 10, 20, sc)
+    A.blocks.cache
+    val d = DenseVector.rand(200)
+    val result = A.multiply_diag(d)
+    val breezeA =  new BDM[Double](100,200,A.toLocalMatrix.toArray)
+    val breezeResult = breezeA*diag(d.toBreeze)
+    assert(sum(abs(new BDM[Double](100,200,result.toLocalMatrix.toArray) - breezeResult)) <= 1e-10)
+  }
+
+  test("BlockMatrix weighted outer product works properly") {
+    val A = randBlockMatrix(100, 200, 10, 20, sc)
+    A.blocks.cache
+    val d = DenseVector.rand(200)
+    val result = A.weighted_outer_prod(d)
+    val breezeA =  new BDM[Double](100,200,A.toLocalMatrix.toArray)
+    val breezeResult = breezeA*diag(d.toBreeze)*breezeA.t
+    assert(sum(abs(new BDM[Double](100,100,result.toLocalMatrix.toArray) - breezeResult)) <= 1e-10)
+  }
+
+  def randBlockMatrix(m:Int, n:Int,  nvertblocks: Int, nhorizblocks: Int, sc: SparkContext): BlockMatrix = {
+    val inds = for(r <- 0 to nvertblocks-1; c <- 0 to nhorizblocks-1) yield (r,c)
+    val blocks = sc.parallelize(inds).map(x => (x, DenseMatrix.rand(m/nvertblocks,n/nhorizblocks)))
+    new BlockMatrix(blocks,m/nvertblocks, n/nhorizblocks, m.toLong,n.toLong)
+  }
+}

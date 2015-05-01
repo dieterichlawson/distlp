@@ -1,44 +1,51 @@
-package cg 
+package distlp.cg
 
 import org.apache.spark.Logging
-
-import breeze.linalg._
-import breeze.linalg.{DenseVector => BDV, DenseMatrix => BDM}
-import org.apache.spark.mllib.linalg.distributed._
 import org.apache.spark.mllib.linalg._
-import org.apache.spark.rdd.RDD
 import org.apache.spark.SparkContext
-import org.apache.spark.storage._
-import org.apache.spark.broadcast._
+import org.apache.spark.vecext._
+import org.apache.spark.vecext.norm
+import distlp.linalg.matext._
 
-class ConjugateGradientSolver(
-               val A: RowMatrix,
-               val b: BDV[Double],
-               val tol: Double = 1e-6,
-               val verbose: Boolean = false,
-               @transient val sc: SparkContext)
-               extends Serializable with Logging{
+class ConjugateGradientSolver(val A: Function1[DenseVector, DenseVector],
+                              val b: DenseVector,
+                              val n: Long,
+                              val x_0: DenseVector = null,
+                              val tol: Double = 1e-6,
+                              val verbose: Boolean = false,
+                              @transient val sc: SparkContext)
+  extends Serializable with Logging {
 
-  var iter: Int=0
-  var r: BDV[Double] = b
-  var p: BDV[Double] = r
-  var x: BDV[Double] = BDV.zeros[Double](A.numCols().toInt)
+  var iter: Int = 0
+  var x: DenseVector = _
+  
+  if (x_0 == null){
+    x = DenseVector.zeros(n.toInt)
+  }else{
+    x = x_0.copy
+  }
 
-  def solve(){
+  var r: DenseVector = b.copy
+  var p: DenseVector = r.copy
+
+  def solve() {
     var converged = false
-    while(!converged){
-      val Ap = BDV[Double](A.multiply(Matrices.dense(A.numCols().toInt,1,p.data)).
-                             rows.map(x => x(0)).collect())
-      val alpha = (r.t*r)/(p.t*Ap)
-      x = x + p*alpha
-      val r_new = r - Ap*alpha
-      if(norm(r_new) <= tol) converged = true
-      val beta = (r_new.t*r_new)/(r.t*r)
-      r = r_new
-      p = r + p*beta
-      iter = iter+1
-      val err= norm(r_new)
-      if(verbose) println(s"Iteration $iter, error: $err")
+    var rs = scala.math.pow(norm(r),2)
+    while (!converged) {
+      val t0 = System.nanoTime()
+      val Ap = A(p)
+      val alpha = rs / (p dot Ap)
+      x = x + (alpha * p)
+      r = r - (alpha * Ap)
+      if (norm(r) <= tol) converged = true
+      val rs_new = scala.math.pow(norm(r),2)
+      val beta = rs_new / rs
+      p = r + (beta * p)
+      rs = rs_new
+      iter = iter + 1
+      val err = norm(r)
+      val t = (System.nanoTime() - t0)/1e9
+      if (verbose) println(s"Iteration $iter, error: $err, time: $t s")
     }
   }
 }

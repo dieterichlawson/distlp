@@ -1,0 +1,124 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package distlp.examples
+
+import breeze.linalg.{DenseMatrix => BDM, DenseVector => BDV, _}
+import distlp.cg.ConjugateGradientSolver
+import distlp.LPSolver
+import org.apache.spark.mllib.linalg.{Matrix, Vector, DenseMatrix, DenseVector}
+import org.apache.spark.mllib.linalg.distributed._
+import org.apache.spark.{SparkConf, SparkContext}
+import scopt.OptionParser
+import scala.util.Random
+
+object LPSolverExample {
+
+  val defaultParams = Params()
+
+  case class Params(
+                     numrows: Int = 100,
+                     numcols: Int = 200,
+                     tol: Double = 1e-6
+                     )
+
+  val parser = new OptionParser[Params]("LP Solver") {
+    head("LP SOlver: An example app for using the distributed LP Solver.")
+    opt[Int]("numrows")
+      .text(s"number of rows, default: ${defaultParams.numrows}")
+      .action((x, c) => c.copy(numrows = x))
+    opt[Int]("numcols")
+      .text(s"number of cols, default: ${defaultParams.numcols}")
+      .action((x, c) => c.copy(numcols= x))
+    opt[Double]("tol")
+      .text(s"tolerance, default: ${defaultParams.tol}")
+      .action((x, c) => c.copy(tol = x))
+  }
+
+  def main(args: Array[String]) {
+    parser.parse(args, defaultParams).map { params =>
+      run(params)
+    } getOrElse {
+      sys.exit(1)
+    }
+  }
+ 
+  def randDM(m:Int, n: Int): Matrix = new DenseMatrix(m,n,Array.fill(m*n)(Random.nextDouble))
+
+  def randBlockMatrix(m:Int, n:Int,  nvertblocks: Int, nhorizblocks: Int, sc: SparkContext): BlockMatrix = {
+      val inds = for(r <- 0 to nvertblocks-1; c <- 0 to nhorizblocks-1) yield (r,c)
+        val blocks = sc.parallelize(inds).map(x => (x, randDM(m/nvertblocks,n/nhorizblocks)))
+          new BlockMatrix(blocks,m/nvertblocks, n/nhorizblocks, m.toLong,n.toLong)
+  }
+
+  def slice(v: DenseVector,f: Int, t: Int): DenseVector = new DenseVector(v.values.slice(f,t))
+
+  def toBreeze(x: org.apache.spark.mllib.linalg.Vector): BDV[Double] = new BDV[Double](x.toArray)
+
+  def toSpark(x: BDV[Double]): org.apache.spark.mllib.linalg.DenseVector = new DenseVector(x.data)
+
+  def flatMapfn(rc: Tuple2[Int,Int], M: Matrix, v: DenseVector): TraversableOnce[(Int,Double)] = {
+       val row = rc._1*M.numRows; 
+       val col = rc._2*M.numCols;
+       (row to row + M.numRows).zip(M.multiply(slice(v,col,col + M.numCols)).toArray)
+  }
+
+  def mv_mult(M: BlockMatrix, v: BDV[Double]): BDV[Double] = {
+    val sv = toSpark(v);
+    val r = M.blocks.flatMap(x => flatMapfn(x._1,x._2,sv)).
+              reduceByKey(_ + _).
+              collect().
+              sortWith(_._1 < _._1).
+              map(_._2)
+    new BDV[Double](r)
+  }
+
+  def run(params: Params) {
+    // Housekeeping for spark
+    val conf = new SparkConf().setAppName("Conjugate Gradient")
+    val sc = new SparkContext(conf)
+    println(sc.master)
+    if (sc.master.equals("local")) {
+      sc.setCheckpointDir("/Users/dlaw/foo")
+    } else {
+      sc.setCheckpointDir(s"hdfs://${sc.master.substring(8, sc.master.length - 5)}:9000/root/scratch")
+    }
+    val numWorkers = 8
+    val coresPerWorker = 4
+    val tasksPerCore = 3
+    val parallelism = numWorkers * coresPerWorker * tasksPerCore
+    val A = randBlockMatrix(params.numrows, params.numcols,params.numrows/10,params.numcols/10,sc)
+    val m = params.numrows
+    val n = params.numcols
+    A.blocks.cache
+    println("Created matrix")
+    val x = BDV.rand[Double](n)
+    val b = mv_mult(A,x)
+    val c = BDV.rand[Double](n)
+    val y = BDV.zeros[Double](m)
+    val z = c.copy
+    val lp = new LPSolver(A,b,c,x,y,z,0.5,0.5,1e-6,1e-6,10,sc)
+    println("Created solver")
+    lp.solve
+    println("Solved")
+    print("Final Solution: ")
+    println(lp.x)
+    sc.stop
+  }
+
+
+}

@@ -1,0 +1,37 @@
+package distlp.cg
+
+import org.scalatest.FunSuite
+import org.scalatest.Matchers
+import distlp.SparkTestUtils
+
+import org.apache.spark.mllib.linalg.distributed.BlockMatrix
+import org.apache.spark.mllib.linalg.DenseVector
+import org.apache.spark.mllib.linalg.DenseMatrix
+import distlp.linalg._
+import distlp.linalg.matext._
+import org.apache.spark.vecext._
+import org.apache.spark.vecext.norm
+
+import org.apache.spark.SparkContext
+
+class ConjugateGradientSuite extends SparkTestUtils{
+  
+  test("Conjugate Gradient correctly solves the system") {
+    val A = randBlockMatrix(200, 100, 20, 10, sc)
+    A.blocks.cache
+    val S = A.transpose.multiply(A)
+    S.blocks.cache
+    val x = DenseVector.rand(100)
+    val b = S.multiply(x)
+    println("Created matrices, solving cg problem...")
+    val cg = new ConjugateGradientSolver(S.multiply(_), b, S.numCols, 1e-7, true, sc)
+    cg.solve
+    assert(norm(x - cg.x) <= 1e-6)
+  }
+
+  def randBlockMatrix(m:Int, n:Int,  nvertblocks: Int, nhorizblocks: Int, sc: SparkContext): BlockMatrix = {
+    val inds = for(r <- 0 to nvertblocks-1; c <- 0 to nhorizblocks-1) yield (r,c)
+    val blocks = sc.parallelize(inds).map(x => (x, DenseMatrix.rand(m/nvertblocks,n/nhorizblocks)))
+    new BlockMatrix(blocks,m/nvertblocks, n/nhorizblocks, m.toLong, n.toLong)
+  }
+}
